@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -33,3 +32,14 @@ SessionLocal = sessionmaker(
 # Database SQLAlchemy model classes will inherit from this Base class.
 Base = declarative_base()
 
+def get_db():
+    # Open a database session for one API request.
+    db = SessionLocal()
+
+    try:
+        # yield gives the open session to the route function.
+        yield db
+
+    finally:
+        # Always close the session after the request finishes.
+        db.close()
