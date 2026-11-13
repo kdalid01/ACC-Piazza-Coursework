@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, DateTime
 from database import Base
 
 # User is a Python class, but SQLAlchemy maps it to the user table.
@@ -24,3 +24,20 @@ class User(Base):
         String,
         nullable=False
     )
+
+
+# Post is a Python class, but SQLAlchemy maps it to the posts table.
+class Post(Base):
+    # Table name that will be created in SQLite.
+    __tablename__ = "posts"
+
+    # id is the primary key. SQLite will generate it automatically.
+    id = Column(Integer, primary_key=True, index=True)
+
+    # A post must have a title and body.
+    title = Column(String, nullable=False)
+    body = Column(String, nullable=False)
+
+    # A post records when it was created and when it expires.
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
