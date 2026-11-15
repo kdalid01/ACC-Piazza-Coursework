@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
 
 from datetime import datetime
 
@@ -12,6 +12,25 @@ class UserResponse(BaseModel):
 
     # Allows Pydantic to read values from SQLAlchemy objects.
     model_config = ConfigDict(from_attributes=True)
+
+
+
+# Data accepted when registering a new user.
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+
+# Data accepted when logging in.
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+# Data returned after a successful login.
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
 
 
 
