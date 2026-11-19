@@ -67,6 +67,20 @@ class PostCreate(BaseModel):
         return value
 
 
+
+class CommentResponse(BaseModel):
+    id: int
+    author_id: int
+    post_id: int
+    body: str
+    created_at: datetime = Field(
+        validation_alias="created_at_utc"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+
 # Data returned by the API.
 # This schema describes the response shape sent back to the client.
 class PostResponse(BaseModel):
@@ -87,5 +101,27 @@ class PostResponse(BaseModel):
 
     status: Literal["Live", "Expired"]
 
+    likes: int
+    dislikes: int
+    comments: list[CommentResponse]
+
     # This allows Pydantic to read values from SQLAlchemy objects.
     model_config = ConfigDict(from_attributes=True)
+
+
+
+class ReactionCreate(BaseModel):
+    value: Literal["like", "dislike"]
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+    @field_validator("body")
+    @classmethod
+    def validate_body(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Comment cannot be whitespace-only")
+        return value
+

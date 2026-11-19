@@ -9,7 +9,7 @@ from rules import post_is_live, post_status
     "seconds, expected",
     [(-1, True), (0, False), (1, False)]
 )
-def test_post_expiry_boundary(seconds, expected):
+def test_post_is_live_boundary(seconds, expected):
     expires_at = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
     now = expires_at + timedelta(seconds=seconds)
 

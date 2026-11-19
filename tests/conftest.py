@@ -77,27 +77,3 @@ def auth_headers(client):
     return {"Authorization": f"Bearer {token}"}
 
 
-
-@pytest.fixture
-def auth_headers(client):
-    registered = client.post(
-        "/auth/register",
-        json={
-            "email": "test@example.com",
-            "password": "test-password-123"
-        }
-    )
-    assert registered.status_code == 201
-
-    logged_in = client.post(
-        "/auth/login",
-        json={
-            "email": "test@example.com",
-            "password": "test-password-123"
-        }
-    )
-    assert logged_in.status_code == 200
-
-    token = logged_in.json()["access_token"]
-
-    return {"Authorization": f"Bearer {token}"}

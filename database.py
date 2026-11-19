@@ -1,7 +1,20 @@
+import os
 from pathlib import Path
+import sqlite3
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+
+
+# Enable foreign-key enforcement for SQLite connections.
+@event.listens_for(Engine, "connect")
+def enable_foreign_keys(dbapi_connection, connection_record):
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 # This creates a SQLite database file called piazza.db.

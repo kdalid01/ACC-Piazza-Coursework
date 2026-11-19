@@ -1,7 +1,7 @@
 
 from sqlalchemy import (
     Column, Integer, String, DateTime,
-    ForeignKey, Table
+    ForeignKey, Table, UniqueConstraint, CheckConstraint
 )
 from database import Base
 from sqlalchemy.orm import relationship
@@ -32,6 +32,9 @@ class User(Base):
 
     # One user can create multiple posts.
     posts = relationship("Post", back_populates="author")
+
+    # One user can write many comments.
+    comments = relationship("Comment", back_populates="author")
 
 
 
@@ -115,6 +118,107 @@ class Post(Base):
             self.expires_at,
             datetime.now(timezone.utc)
         )
+    
+
+    # All reactions associated with this post.
+    reactions = relationship("Reaction", back_populates="post")
+
+    # One post can have many comments.
+    comments = relationship("Comment", back_populates="post")
+
+    # Calculate the number of likes.
+    @property
+    def likes(self):
+        return sum(
+            reaction.value == "like"
+            for reaction in self.reactions
+        )
+
+    # Calculate the number of dislikes.
+    @property
+    def dislikes(self):
+        return sum(
+            reaction.value == "dislike"
+            for reaction in self.reactions
+        )
+
+
+class Reaction(Base):
+    __tablename__ = "reactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id"),
+        nullable=False
+    )
+
+    value = Column(String, nullable=False)
+    
+    # Connect this reaction to its post.
+    post = relationship("Post", back_populates="reactions")
+
+
+    
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "post_id",
+            name="uq_user_post_reaction"
+        ),
+        CheckConstraint(
+            "value IN ('like', 'dislike')",
+            name="ck_reaction_valid_value"
+        ),
+    )
+
+
+
+
+# Comment is a Python class mapped to the comments table.
+class Comment(Base):
+    __tablename__ = "comments"
+
+    # Each comment receives a unique ID.
+    id = Column(Integer, primary_key=True, index=True)
+
+    # The user who wrote the comment.
+    author_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    # The post that the comment belongs to.
+    post_id = Column(
+        Integer,
+        ForeignKey("posts.id"),
+        nullable=False
+    )
+
+    # The text written by the user.
+    body = Column(String, nullable=False)
+
+    # When the comment was created.
+    created_at = Column(DateTime, nullable=False)
+    # Return the comment timestamp with UTC timezone information.
+    @property
+    def created_at_utc(self):
+        from rules import as_utc
+        return as_utc(self.created_at)
+
+    # Connect each comment to its author.
+    author = relationship("User", back_populates="comments")
+
+    # Connect each comment to its post.
+    post = relationship("Post", back_populates="comments")
 
 
 

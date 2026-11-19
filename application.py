@@ -8,6 +8,7 @@ import schemas
 from database import engine, get_db
 from routers import auth
 from security import get_current_user
+from rules import post_status, as_utc
 
 from typing import Literal
 
@@ -20,6 +21,7 @@ def create_app(db_engine=engine):
 
     app.include_router(auth.router, prefix="/auth")
 
+    
     # Check whether the API is running.
     @app.get("/health")
     def health():
@@ -150,5 +152,170 @@ def create_app(db_engine=engine):
         db.refresh(post)
 
         return post
+
+        
+    # Create or update the current user's reaction to a post.
+    @app.put("/posts/{post_id}/reaction")
+    def react_to_post(
+        post_id: int,
+        reaction_data: schemas.ReactionCreate,
+        db: Session = Depends(get_db),
+        current_user: models.User = Depends(get_current_user)
+    ):
+        # Find the requested post.
+        post = db.query(models.Post).filter(
+            models.Post.id == post_id
+        ).first()
+
+        if post is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Post not found"
+            )
+
+        # Expired posts cannot receive new reactions.
+        now = datetime.now(timezone.utc)
+
+        if post_status(post.expires_at, now) == "Expired":
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot react to an expired post"
+            )
+
+        # Authors cannot react to their own posts.
+        if post.author_id == current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Authors cannot react to their own posts"
+            )
+
+        # Find this user's existing reaction, if any.
+        existing_reaction = db.query(models.Reaction).filter(
+            models.Reaction.user_id == current_user.id,
+            models.Reaction.post_id == post_id
+        ).first()
+
+        if existing_reaction is None:
+            # Insert a new reaction.
+            reaction = models.Reaction(
+                user_id=current_user.id,
+                post_id=post_id,
+                value=reaction_data.value
+            )
+            db.add(reaction)
+        else:
+            # Replace the existing reaction value.
+            existing_reaction.value = reaction_data.value
+
+        db.commit()
+
+        # Count the post's likes and dislikes.
+        reactions = db.query(models.Reaction).filter(
+            models.Reaction.post_id == post_id
+        ).all()
+
+        likes = sum(r.value == "like" for r in reactions)
+        dislikes = sum(r.value == "dislike" for r in reactions)
+
+        return {
+            "post_id": post_id,
+            "likes": likes,
+            "dislikes": dislikes
+        }
+    
+
+    @app.post(
+        "/posts/{post_id}/comments",
+        response_model=schemas.CommentResponse,
+        status_code=201
+    )
+    def create_comment(
+        post_id: int,
+        comment_data: schemas.CommentCreate,
+        db: Session = Depends(get_db),
+        current_user: models.User = Depends(get_current_user)
+    ):
+        # 1. Find the post.
+        post = db.query(models.Post).filter(
+            models.Post.id == post_id
+        ).first()
+
+        if post is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Post not found"
+            )
+
+        # 2. Check that the post has not expired.
+        if post_status(
+            post.expires_at,
+            datetime.now(timezone.utc)
+        ) == "Expired":
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot comment on an expired post"
+            )
+
+        # 3. Create the new comment.
+        new_comment = models.Comment(
+            author_id=current_user.id,
+            post_id=post.id,
+            body=comment_data.body,
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        )
+
+        # 4. Save the comment to the database.
+        db.add(new_comment)
+        db.commit()
+        db.refresh(new_comment)
+
+        # 5. Return the saved comment.
+        return new_comment
+
+
+
+    
+    # Find the most-active live post in a topic.
+    @app.get(
+        "/topics/{topic}/most-active",
+        response_model=list[schemas.PostResponse]
+    )
+    def get_most_active_post(
+        topic: Literal["Politics", "Health", "Sport", "Tech"],
+        db: Session = Depends(get_db),
+        current_user: models.User = Depends(get_current_user)
+    ):
+        # Find posts belonging to the requested topic.
+        posts = (
+            db.query(models.Post)
+            .join(models.Post.topics)
+            .filter(models.Topic.name == topic)
+            .all()
+        )
+
+        # Keep only live posts.
+        now = datetime.now(timezone.utc)
+
+        live_posts = [
+            post for post in posts
+            if post_status(post.expires_at, now) == "Live"
+        ]
+
+        # No live posts means an empty list.
+        if not live_posts:
+            return []
+
+        # Rank by activity, creation time, then post ID.
+        ranked_posts = sorted(
+            live_posts,
+            key=lambda post: (
+                -(post.likes + post.dislikes),
+                -as_utc(post.created_at).timestamp(),
+                post.id
+            )
+        )
+
+        # Return the winner as a list.
+        return [ranked_posts[0]]
 
     return app
