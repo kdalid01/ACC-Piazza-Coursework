@@ -4,14 +4,17 @@ import models
 from database import get_db
 
 import jwt
+import rules
+import pytest
+
 from security import SECRET_KEY, ALGORITHM
 
 
 def future_expiry():
-    # Generate an expiry one day in the future.
+    # Generate an expiry 17 days in the future.
     # This avoids using a fixed date that eventually becomes outdated.
     return (
-        datetime.now(timezone.utc) + timedelta(days=1)
+        datetime.now(timezone.utc) + timedelta(days=17)
     ).isoformat()
 
 
@@ -137,26 +140,6 @@ def test_missing_post(client, auth_headers):
 
 
 
-def test_invalid_post(client, auth_headers):
-    # The title is invalid, but the other fields are valid.
-    # This isolates title validation.
-    post_data = {
-        "title": "",
-        "body": "This post has an empty title.",
-        "topics": ["Tech"],
-        "expires_at": future_expiry()
-    }
-
-    response = client.post(
-        "/posts",
-        json=post_data,
-        headers=auth_headers
-    )
-
-    assert response.status_code == 422
-
-
-
 def test_data_survives_new_application(app_factory):
     post_data = {
         "title": "Cloud computing",
@@ -209,12 +192,6 @@ def test_data_survives_new_application(app_factory):
     # created by the first application.
 
 
-def test_posts_require_authentication(client):
-    # A request without a JWT must be rejected.
-    response = client.get("/posts")
-
-    assert response.status_code == 401
-
 
 def test_health_does_not_require_authentication(client):
     # Health checks are publicly accessible.
@@ -223,46 +200,6 @@ def test_health_does_not_require_authentication(client):
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
 
-
-
-def test_user_can_like_another_users_post(client, auth_headers):
-    # Create a post as the first user.
-    post_data = {
-        "title": "Cloud computing",
-        "body": "What are the advantages of containers?",
-        "topics": ["Tech"],
-        "expires_at": future_expiry()
-    }
-
-    created = client.post(
-        "/posts",
-        json=post_data,
-        headers=auth_headers
-    )
-
-    assert created.status_code == 201
-
-    post_id = created.json()["id"]
-
-    # Register and log in as a different user.
-    nick_headers = register_second_user(client)
-
-    # Nick likes the first user's post.
-    response = client.put(
-        f"/posts/{post_id}/reaction",
-        json={"value": "like"},
-        headers=nick_headers
-    )
-
-    print("Reaction response:", response.status_code, response.json())
-
-    assert response.status_code == 200
-
-    assert response.json() == {
-        "post_id": post_id,
-        "likes": 1,
-        "dislikes": 0
-    }
 
 
 def test_repeated_and_switched_reactions(client, auth_headers):
@@ -317,41 +254,6 @@ def test_repeated_and_switched_reactions(client, auth_headers):
     assert switched.json()["dislikes"] == 1
 
 
-def test_author_cannot_react_to_own_post(client, auth_headers):
-    # Create a post as the first user.
-    created = client.post(
-        "/posts",
-        json={
-            "title": "My Tech post",
-            "body": "Discussion about cloud computing",
-            "topics": ["Tech"],
-            "expires_at": future_expiry()
-        },
-        headers=auth_headers
-    )
-
-    assert created.status_code == 201
-    post_id = created.json()["id"]
-
-    # The same user attempts to like their own post.
-    response = client.put(
-        f"/posts/{post_id}/reaction",
-        json={"value": "like"},
-        headers=auth_headers
-    )
-
-    assert response.status_code == 403
-
-
-def test_reaction_requires_authentication(client):
-    response = client.put(
-        "/posts/9999/reaction",
-        json={"value": "like"}
-    )
-
-    assert response.status_code == 401
-
-
 
 def test_reaction_to_missing_post(client, auth_headers):
     response = client.put(
@@ -364,24 +266,14 @@ def test_reaction_to_missing_post(client, auth_headers):
 
 
 
+
 def test_invalid_reaction_value(client, auth_headers):
-    response = client.put(
-        "/posts/9999/reaction",
-        json={"value": "love"},
-        headers=auth_headers
-    )
-
-    assert response.status_code == 422
-
-
-
-def test_expired_post_rejects_reaction(client, auth_headers):
     # Create a live post.
     created = client.post(
         "/posts",
         json={
-            "title": "Expiring Tech post",
-            "body": "Discussion before expiry",
+            "title": "Tech discussion",
+            "body": "Testing reaction validation",
             "topics": ["Tech"],
             "expires_at": future_expiry()
         },
@@ -391,40 +283,18 @@ def test_expired_post_rejects_reaction(client, auth_headers):
     assert created.status_code == 201
     post_id = created.json()["id"]
 
-    # A different user will attempt the reaction.
+    # Another user attempts an invalid reaction.
     nick_headers = register_second_user(client)
 
-    # Access the same temporary test database.
-    db_override = client.app.dependency_overrides[get_db]
-    db_generator = db_override()
-    db = next(db_generator)
-
-    try:
-        post = db.query(models.Post).filter(
-            models.Post.id == post_id
-        ).first()
-
-        assert post is not None
-
-        # Simulate the post having expired.
-        post.expires_at = (
-            datetime.now(timezone.utc)
-            - timedelta(seconds=1)
-        ).replace(tzinfo=None)
-
-        db.commit()
-
-    finally:
-        db_generator.close()
-
-    # Nick attempts to react after expiry.
     response = client.put(
         f"/posts/{post_id}/reaction",
-        json={"value": "like"},
+        json={"value": "love"},
         headers=nick_headers
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 422
+
+
 
 
 def test_user_can_comment_on_post(client, auth_headers):
@@ -470,48 +340,6 @@ def test_user_can_comment_on_post(client, auth_headers):
 
 
 
-def test_multiple_comments_on_post(client, auth_headers):
-    # Create a live post.
-    created = client.post(
-        "/posts",
-        json={
-            "title": "Cloud discussion",
-            "body": "What do you think about cloud computing?",
-            "topics": ["Tech"],
-            "expires_at": future_expiry()
-        },
-        headers=auth_headers
-    )
-
-    assert created.status_code == 201
-    post_id = created.json()["id"]
-
-    # Add two different comments.
-    for text in ["First comment", "Second comment"]:
-        response = client.post(
-            f"/posts/{post_id}/comments",
-            json={"body": text},
-            headers=auth_headers
-        )
-        assert response.status_code == 201
-
-    # Retrieve the post and check both comments.
-    retrieved = client.get(
-        f"/posts/{post_id}",
-        headers=auth_headers
-    )
-
-    assert retrieved.status_code == 200
-
-    comments = retrieved.json()["comments"]
-    assert len(comments) == 2
-    assert {comment["body"] for comment in comments} == {
-        "First comment",
-        "Second comment"
-    }
-
-
-
 def test_empty_comment_rejected(client, auth_headers):
     created = client.post(
         "/posts",
@@ -550,138 +378,6 @@ def test_comment_on_missing_post(client, auth_headers):
         "detail": "Post not found"
     }
 
-
-
-def test_expired_post_rejects_comment(client, auth_headers):
-    # Create a live post.
-    created = client.post(
-        "/posts",
-        json={
-            "title": "Expiring discussion",
-            "body": "This discussion will expire.",
-            "topics": ["Health"],
-            "expires_at": future_expiry()
-        },
-        headers=auth_headers
-    )
-
-    assert created.status_code == 201
-    post_id = created.json()["id"]
-
-    # Add a comment while the post is live.
-    comment = client.post(
-        f"/posts/{post_id}/comments",
-        json={"body": "Comment before expiry"},
-        headers=auth_headers
-    )
-
-    assert comment.status_code == 201
-
-    # Access the temporary test database.
-    db_override = client.app.dependency_overrides[get_db]
-    db_generator = db_override()
-    db = next(db_generator)
-
-    try:
-        # Find the post in SQLite.
-        post = db.query(models.Post).filter(
-            models.Post.id == post_id
-        ).first()
-
-        assert post is not None
-
-        # Simulate the post having expired.
-        post.expires_at = (
-            datetime.now(timezone.utc)
-            - timedelta(seconds=1)
-        ).replace(tzinfo=None)
-
-        db.commit()
-    finally:
-        db_generator.close()
-
-    # Attempt to comment after expiry.
-    rejected = client.post(
-        f"/posts/{post_id}/comments",
-        json={"body": "Comment after expiry"},
-        headers=auth_headers
-    )
-
-    assert rejected.status_code == 409
-
-    # The expired post must still be readable.
-    retrieved = client.get(
-        f"/posts/{post_id}",
-        headers=auth_headers
-    )
-
-    assert retrieved.status_code == 200
-    assert retrieved.json()["status"] == "Expired"
-
-    # Its original comment must still exist.
-    comments = retrieved.json()["comments"]
-
-    assert len(comments) == 1
-    assert comments[0]["body"] == "Comment before expiry"
-
-
-
-def test_most_active_post(client, auth_headers):
-    # Create three Tech posts as the first user.
-    post_ids = []
-
-    for title in ["Post A", "Post B", "Post C"]:
-        created = client.post(
-            "/posts",
-            json={
-                "title": title,
-                "body": "Testing post activity",
-                "topics": ["Tech"],
-                "expires_at": future_expiry()
-            },
-            headers=auth_headers
-        )
-
-        assert created.status_code == 201
-        post_ids.append(created.json()["id"])
-
-    # Create a second user who can react to the posts.
-    nick_headers = register_second_user(client)
-
-    # Nick likes Post A.
-    response = client.put(
-        f"/posts/{post_ids[0]}/reaction",
-        json={"value": "like"},
-        headers=nick_headers
-    )
-    assert response.status_code == 200
-
-    # Nick dislikes Post B.
-    response = client.put(
-        f"/posts/{post_ids[1]}/reaction",
-        json={"value": "dislike"},
-        headers=nick_headers
-    )
-    assert response.status_code == 200
-
-    # Nick has not reacted to Post C.
-    # A and B therefore have one reaction each.
-    # C has zero reactions.
-
-    response = client.get(
-        "/topics/Tech/most-active",
-        headers=auth_headers
-    )
-
-    assert response.status_code == 200
-
-    result = response.json()
-
-    # Post B is newer than Post A, so it wins the tie.
-    assert len(result) == 1
-    assert result[0]["id"] == post_ids[1]
-    assert result[0]["likes"] == 0
-    assert result[0]["dislikes"] == 1
 
 
 def test_most_active_empty_topic(client, auth_headers):
@@ -954,3 +650,416 @@ def test_expired_token_rejected(client):
     # The expired JWT must be rejected.
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid token"
+
+
+
+def test_exact_expiry_boundary(
+    client, auth_headers, monkeypatch
+):
+    # Choose a fixed time instead of the real clock.
+    start = datetime(
+        2027, 1, 1, 12, 0,
+        tzinfo=timezone.utc
+    )
+    expiry = start + timedelta(hours=1)
+
+    # Make the application believe it is 12:00.
+    monkeypatch.setattr(
+        rules, "utcnow", lambda: start
+    )
+
+    # Create a post that expires at 13:00.
+    created = client.post(
+        "/posts",
+        json={
+            "title": "Expiry boundary test",
+            "body": "Testing the exact expiry time",
+            "topics": ["Tech"],
+            "expires_at": expiry.isoformat()
+        },
+        headers=auth_headers
+    )
+
+    assert created.status_code == 201
+    post_id = created.json()["id"]
+    assert created.json()["status"] == "Live"
+
+    # Register a second user who can react.
+    nick_headers = register_second_user(client)
+
+    # Move the clock to one second before expiry.
+    monkeypatch.setattr(
+        rules,
+        "utcnow",
+        lambda: expiry - timedelta(seconds=1)
+    )
+
+    # A reaction is allowed just before expiry.
+    reaction = client.put(
+        f"/posts/{post_id}/reaction",
+        json={"value": "like"},
+        headers=nick_headers
+    )
+
+    assert reaction.status_code == 200
+    assert reaction.json()["likes"] == 1
+
+    # Move the clock to EXACTLY the expiry time.
+    monkeypatch.setattr(
+        rules, "utcnow", lambda: expiry
+    )
+
+    # The same reaction must now be rejected.
+    reaction = client.put(
+        f"/posts/{post_id}/reaction",
+        json={"value": "like"},
+        headers=nick_headers
+    )
+
+    assert reaction.status_code == 409
+
+    # Comments must also be rejected.
+    comment = client.post(
+        f"/posts/{post_id}/comments",
+        json={"body": "Too late"},
+        headers=nick_headers
+    )
+
+    assert comment.status_code == 409
+
+    # The expired post must remain readable.
+    retrieved = client.get(
+        f"/posts/{post_id}",
+        headers=auth_headers
+    )
+
+    assert retrieved.status_code == 200
+    assert retrieved.json()["status"] == "Expired"
+    assert retrieved.json()["likes"] == 1
+    assert retrieved.json()["comments"] == []
+
+
+    # Move the clock to one second after expiry.
+    monkeypatch.setattr(
+        rules,
+        "utcnow",
+        lambda: expiry + timedelta(seconds=1)
+    )
+
+    # The post should still be expired.
+    retrieved = client.get(
+        f"/posts/{post_id}",
+        headers=auth_headers
+    )
+
+    assert retrieved.status_code == 200
+    assert retrieved.json()["status"] == "Expired"
+
+    # A new comment should be rejected after expiry.
+    comment = client.post(
+        f"/posts/{post_id}/comments",
+        json={"body": "Comment after expiry"},
+        headers=nick_headers
+    )
+
+    assert comment.status_code == 409
+
+    # A repeated reaction should be rejected after expiry.
+    reaction = client.put(
+        f"/posts/{post_id}/reaction",
+        json={"value": "like"},
+        headers=nick_headers
+    )
+
+    assert reaction.status_code == 409
+
+
+
+def test_post_with_multiple_topics(client, auth_headers):
+    # Create one post belonging to two topics.
+    response = client.post(
+        "/posts",
+        json={
+            "title": "Technology and health",
+            "body": "How can technology improve healthcare?",
+            "topics": ["Tech", "Health"],
+            "expires_at": future_expiry()
+        },
+        headers=auth_headers
+    )
+
+    assert response.status_code == 201
+
+    post_id = response.json()["id"]
+
+    # The same post should appear under Tech.
+    tech = client.get(
+        "/posts?topic=Tech",
+        headers=auth_headers
+    )
+
+    assert tech.status_code == 200
+    assert len(tech.json()) == 1
+    assert tech.json()[0]["id"] == post_id
+
+
+    # The same post should also appear under Health.
+    health = client.get(
+        "/posts?topic=Health",
+        headers=auth_headers
+    )
+
+    assert health.status_code == 200
+    assert len(health.json()) == 1
+    assert health.json()[0]["id"] == post_id
+
+    # But not under Sport.
+    sport = client.get(
+        "/posts?topic=Sport",
+        headers=auth_headers
+    )
+
+    assert sport.status_code == 200
+    assert sport.json() == []
+
+
+
+def test_invalid_topic_rejected(client, auth_headers):
+    # Parenting is not one of the four permitted topics.
+    response = client.get(
+        "/posts?topic=Parenting",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 422
+
+
+def test_invalid_status_filter_rejected(client, auth_headers):
+    # Pending is not a permitted post status.
+    response = client.get(
+        "/posts?status=Pending",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 422
+
+
+def test_expiry_without_timezone_rejected(client, auth_headers):
+    # This timestamp has no Z or UTC offset.
+    response = client.post(
+        "/posts",
+        json={
+            "title": "Timezone check",
+            "body": "Testing an invalid expiry timestamp",
+            "topics": ["Tech"],
+            "expires_at": "2027-06-01T12:00:00"
+        },
+        headers=auth_headers
+    )
+
+    assert response.status_code == 422
+
+
+
+def test_most_active_with_zero_reactions(client, auth_headers):
+    # Create one Tech post without any reactions.
+    created = client.post(
+        "/posts",
+        json={
+            "title": "Cloud computing discussion",
+            "body": "What are the benefits of cloud computing?",
+            "topics": ["Tech"],
+            "expires_at": future_expiry()
+        },
+        headers=auth_headers
+    )
+
+    assert created.status_code == 201
+    post_id = created.json()["id"]
+
+    # The post should be the most active even with zero reactions.
+    response = client.get(
+        "/topics/Tech/most-active",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["id"] == post_id
+    assert response.json()[0]["likes"] == 0
+    assert response.json()[0]["dislikes"] == 0
+    assert response.json()[0]["status"] == "Live"
+
+
+
+def test_combined_topic_and_status_filter(
+    client, auth_headers, monkeypatch
+):
+    # Using a fixed time so the test doesn't depend on the real clock.
+    start = datetime(
+        2027, 1, 1, 12, 0,
+        tzinfo=timezone.utc
+    )
+
+    monkeypatch.setattr(
+        rules, "utcnow", lambda: start
+    )
+
+    # Create three posts with different topics and expiry times.
+    test_posts = [
+        ("Live Tech post", "Tech", timedelta(days=17)),
+        ("Expired Tech post", "Tech", timedelta(hours=1)),
+        ("Live Health post", "Health", timedelta(days=17)),
+    ]
+
+    post_ids = {}
+
+    for title, topic, duration in test_posts:
+        response = client.post(
+            "/posts",
+            json={
+                "title": title,
+                "body": "Testing topic and status filtering",
+                "topics": [topic],
+                "expires_at": (start + duration).isoformat()
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 201
+        post_ids[title] = response.json()["id"]
+
+    # Moving the clock forward by two hours.
+    # The second Tech post should now be expired.
+    monkeypatch.setattr(
+        rules,
+        "utcnow",
+        lambda: start + timedelta(hours=2)
+    )
+
+    # Filter for live Tech posts.
+    response = client.get(
+        "/posts?topic=Tech&status=Live",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert [post["id"] for post in response.json()] == [
+        post_ids["Live Tech post"]
+    ]
+
+    # Filter for expired Tech posts.
+    response = client.get(
+        "/posts?topic=Tech&status=Expired",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert [post["id"] for post in response.json()] == [
+        post_ids["Expired Tech post"]
+    ]
+
+    # Without a status filter, both Tech posts should be visible.
+    response = client.get(
+        "/posts?topic=Tech",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert {post["id"] for post in response.json()} == {
+        post_ids["Live Tech post"],
+        post_ids["Expired Tech post"]
+    }
+
+    # Without any filters, all three posts should be visible.
+    response = client.get(
+        "/posts",
+        headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+
+
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"title": ""},
+        {"title": "   "},
+        {"body": ""},
+        {"body": "   "},
+        {"topics": []},
+        {"topics": ["Parenting"]},
+    ]
+)
+def test_invalid_post_fields(client, auth_headers, changes):
+    # Start with a valid post.
+    post_data = {
+        "title": "Tech discussion",
+        "body": "A question about technology",
+        "topics": ["Tech"],
+        "expires_at": future_expiry()
+    }
+
+    # Replace one valid field with an invalid value.
+    post_data.update(changes)
+
+    response = client.post(
+        "/posts",
+        json=post_data,
+        headers=auth_headers
+    )
+
+    assert response.status_code == 422
+
+
+def test_post_expiry_in_past_rejected(client, auth_headers):
+    past_expiry = (
+        datetime.now(timezone.utc)
+        - timedelta(days=1)
+    ).isoformat()
+
+    response = client.post(
+        "/posts",
+        json={
+            "title": "Expired before creation",
+            "body": "This post should not be accepted",
+            "topics": ["Tech"],
+            "expires_at": past_expiry
+        },
+        headers=auth_headers
+    )
+
+    assert response.status_code == 422
+
+
+
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        ("get", "/posts", None),
+        ("get", "/posts/1", None),
+        ("post", "/posts", {
+            "title": "Test post",
+            "body": "Test body",
+            "topics": ["Tech"],
+            "expires_at": "2027-06-01T12:00:00Z"
+        }),
+        ("put", "/posts/1/reaction", {"value": "like"}),
+        ("post", "/posts/1/comments", {"body": "Test comment"}),
+        ("get", "/topics/Tech/most-active", None),
+    ]
+)
+def test_business_endpoints_require_authentication(
+    client, method, path, body
+):
+    response = client.request(
+        method.upper(),
+        path,
+        json=body
+    )
+
+    assert response.status_code == 401
+

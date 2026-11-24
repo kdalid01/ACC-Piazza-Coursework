@@ -1,6 +1,12 @@
 from datetime import datetime, timezone
 
 
+def utcnow() -> datetime:
+    """Return the current time in UTC."""
+    return datetime.now(timezone.utc)
+
+
+
 def post_is_live(expires_at: datetime, now: datetime) -> bool:
     """Both arguments must be timezone-aware UTC timestamps."""
     return now < expires_at

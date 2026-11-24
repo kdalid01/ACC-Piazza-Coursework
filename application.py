@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+import rules
+
 from database import engine, get_db
 from routers import auth
 from security import get_current_user
@@ -55,7 +57,7 @@ def create_app(db_engine=engine):
 
         # Filter posts by status option.
         if status is not None:
-            now = datetime.now(timezone.utc)
+            now = rules.utcnow()
 
             posts = [
                 post for post in posts
@@ -119,7 +121,7 @@ def create_app(db_engine=engine):
             topics.append(topic)
 
         # New post's timestamp:
-        now = datetime.now(timezone.utc)
+        now = rules.utcnow()
 
         # Ensures that a new post's expiry is in the future
         if post_data.expires_at.astimezone(timezone.utc) <= now:
@@ -174,7 +176,7 @@ def create_app(db_engine=engine):
             )
 
         # Expired posts cannot receive new reactions.
-        now = datetime.now(timezone.utc)
+        now = rules.utcnow()
 
         if post_status(post.expires_at, now) == "Expired":
             raise HTTPException(
@@ -249,7 +251,7 @@ def create_app(db_engine=engine):
         # 2. Check that the post has not expired.
         if post_status(
             post.expires_at,
-            datetime.now(timezone.utc)
+            rules.utcnow()
         ) == "Expired":
             raise HTTPException(
                 status_code=409,
@@ -261,7 +263,7 @@ def create_app(db_engine=engine):
             author_id=current_user.id,
             post_id=post.id,
             body=comment_data.body,
-            created_at=datetime.now(timezone.utc).replace(tzinfo=None)
+            created_at=rules.utcnow().replace(tzinfo=None)
         )
 
         # 4. Save the comment to the database.
@@ -294,7 +296,7 @@ def create_app(db_engine=engine):
         )
 
         # Keep only live posts.
-        now = datetime.now(timezone.utc)
+        now = rules.utcnow()
 
         live_posts = [
             post for post in posts

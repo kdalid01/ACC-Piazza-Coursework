@@ -111,12 +111,11 @@ class Post(Base):
     # Calculates the post's status whenever it is accessed.
     @property
     def status(self):
-        from datetime import datetime, timezone
-        from rules import post_status
+        from rules import post_status, utcnow
 
         return post_status(
             self.expires_at,
-            datetime.now(timezone.utc)
+            utcnow()
         )
     
 
